@@ -1,7 +1,9 @@
 ﻿using RosMessageTypes.Nav;
 using RosMessageTypes.Std;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using Unity.Robotics.ROSTCPConnector;
 using UnityEngine;
 
@@ -14,6 +16,13 @@ public class GridGenerator : MonoBehaviour
     [Header("Grid")]
     public float cellSize = 0.5f;
     public LayerMask obstacleLayer;
+
+    [Header("Simulation Configuration")]
+    public string configTopic = "/simulation/config";
+    public LayerMask shelfLayer;
+    public LayerMask robotLayer;
+    public LayerMask deliveryLayer;
+    public int packagesPerShelf = 5;
 
     // Internal grid
     private int[,] occupancyGrid;
@@ -29,9 +38,22 @@ public class GridGenerator : MonoBehaviour
         ros = ROSConnection.GetOrCreateInstance();
 
         ros.RegisterPublisher<OccupancyGridMsg>(mapTopic);
+        ros.RegisterPublisher<StringMsg>(configTopic);
 
         GenerateGrid();
+        StartCoroutine(PublishSequence());
+    }
+
+    private System.Collections.IEnumerator PublishSequence()
+    {
+        // First publish the map
         PublishOccupancyGrid();
+        
+        // Wait a short delay to ensure map is received before config
+        yield return new WaitForSeconds(0.5f);
+        
+        // Then publish the simulation config
+        PublishSimulationConfig();
     }
 
     public void GenerateGrid()
@@ -116,10 +138,132 @@ public class GridGenerator : MonoBehaviour
         UnityEngine.Debug.Log("[GridGenerator] OccupancyGrid published on " + mapTopic);
     }
 
+    public void PublishSimulationConfig()
+    {
+        // Get layer indices from LayerMask
+        int shelfLayerIndex = (int)Mathf.Log(shelfLayer.value, 2);
+        int robotLayerIndex = (int)Mathf.Log(robotLayer.value, 2);
+        int deliveryLayerIndex = (int)Mathf.Log(deliveryLayer.value, 2);
+
+        // Find all GameObjects in scene
+        GameObject[] allObjects = FindObjectsByType<GameObject>(FindObjectsSortMode.None);
+        
+        // Detect Shelves by layer - get unique root objects only
+        var shelfObjects = allObjects
+            .Where(obj => obj.layer == shelfLayerIndex)
+            .Select(obj => obj.transform.root.gameObject)  // Get root of hierarchy
+            .Distinct()  // Remove duplicates (children pointing to same root)
+            .OrderBy(g => g.name)
+            .ToList();
+
+        List<ShelfConfig> shelfList = new List<ShelfConfig>();
+        for (int i = 0; i < shelfObjects.Count; i++)
+        {
+            GameObject s = shelfObjects[i];
+            shelfList.Add(new ShelfConfig
+            {
+                id = i + 1,
+                x = s.transform.position.x,
+                z = s.transform.position.z,
+                count = packagesPerShelf
+            });
+        }
+        UnityEngine.Debug.Log($"[GridGenerator] Found {shelfList.Count} shelves by layer");
+
+        // Detect Robots by layer - get unique root objects only
+        var robotObjects = allObjects
+            .Where(obj => obj.layer == robotLayerIndex)
+            .Select(obj => obj.transform.root.gameObject)  // Get root of hierarchy
+            .Distinct()  // Remove duplicates
+            .ToList();
+
+        List<RobotConfig> robotList = new List<RobotConfig>();
+        foreach (var r in robotObjects)
+        {
+            robotList.Add(new RobotConfig
+            {
+                name = r.name,
+                x = r.transform.position.x,
+                z = r.transform.position.z
+            });
+        }
+        UnityEngine.Debug.Log($"[GridGenerator] Found {robotList.Count} robots by layer");
+
+        // Detect Delivery by layer - get root object
+        var deliveryObj = allObjects
+            .Where(obj => obj.layer == deliveryLayerIndex)
+            .Select(obj => obj.transform.root.gameObject)
+            .FirstOrDefault();
+
+        DeliveryConfig deliveryConfig = null;
+        if (deliveryObj != null)
+        {
+            deliveryConfig = new DeliveryConfig
+            {
+                x = deliveryObj.transform.position.x,
+                z = deliveryObj.transform.position.z
+            };
+            UnityEngine.Debug.Log($"[GridGenerator] Found delivery point at ({deliveryConfig.x}, {deliveryConfig.z})");
+        }
+        else
+        {
+            // Provide a default delivery config if none found
+            deliveryConfig = new DeliveryConfig { x = 0.0f, z = 0.0f };
+            UnityEngine.Debug.LogWarning("[GridGenerator] No delivery point found, using default (0, 0)");
+        }
+
+        // Build Config Object
+        SimulationConfig config = new SimulationConfig
+        {
+            shelves = shelfList,
+            robots = robotList,
+            delivery = deliveryConfig
+        };
+
+        string json = JsonUtility.ToJson(config);
+        
+        StringMsg msg = new StringMsg(json);
+        ros.Publish(configTopic, msg);
+        UnityEngine.Debug.Log($"[GridGenerator] Simulation Config published to {configTopic}: {json}");
+    }
+
     public Vector3 GridToWorld(int gx, int gz)
     {
         float worldX = originWorld.x + (gx + 0.5f) * cellSize;
         float worldZ = originWorld.z + (gz + 0.5f) * cellSize;
         return new Vector3(worldX, originWorld.y, worldZ);
     }
+}
+
+// Data Structures for JSON Serialization
+[Serializable]
+public class SimulationConfig
+{
+    public List<ShelfConfig> shelves;
+    public List<RobotConfig> robots;
+    public DeliveryConfig delivery;
+}
+
+[Serializable]
+public class ShelfConfig
+{
+    public int id;
+    public float x;
+    public float z;
+    public int count;
+}
+
+[Serializable]
+public class RobotConfig
+{
+    public string name;
+    public float x;
+    public float z;
+}
+
+[Serializable]
+public class DeliveryConfig
+{
+    public float x;
+    public float z;
 }
