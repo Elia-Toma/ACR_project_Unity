@@ -189,27 +189,29 @@ public class GridGenerator : MonoBehaviour
         }
         UnityEngine.Debug.Log($"[GridGenerator] Found {robotList.Count} robots by layer");
 
-        // Detect Delivery by layer - get root object
-        var deliveryObj = allObjects
+        // Detect Delivery points by layer - get unique root objects
+        var deliveryObjects = allObjects
             .Where(obj => obj.layer == deliveryLayerIndex)
             .Select(obj => obj.transform.root.gameObject)
-            .FirstOrDefault();
+            .Distinct()
+            .ToList();
 
-        DeliveryConfig deliveryConfig = null;
-        if (deliveryObj != null)
+        List<DeliveryConfig> deliveryList = new List<DeliveryConfig>();
+        foreach (var d in deliveryObjects)
         {
-            deliveryConfig = new DeliveryConfig
+            deliveryList.Add(new DeliveryConfig
             {
-                x = deliveryObj.transform.position.x,
-                z = deliveryObj.transform.position.z
-            };
-            UnityEngine.Debug.Log($"[GridGenerator] Found delivery point at ({deliveryConfig.x}, {deliveryConfig.z})");
+                x = d.transform.position.x,
+                z = d.transform.position.z
+            });
         }
-        else
+        UnityEngine.Debug.Log($"[GridGenerator] Found {deliveryList.Count} delivery points");
+
+        if (deliveryList.Count == 0)
         {
             // Provide a default delivery config if none found
-            deliveryConfig = new DeliveryConfig { x = 0.0f, z = 0.0f };
-            UnityEngine.Debug.LogWarning("[GridGenerator] No delivery point found, using default (0, 0)");
+            deliveryList.Add(new DeliveryConfig { x = 0.0f, z = 0.0f });
+            UnityEngine.Debug.LogWarning("[GridGenerator] No delivery points found, using default (0, 0)");
         }
 
         // Build Config Object
@@ -217,7 +219,7 @@ public class GridGenerator : MonoBehaviour
         {
             shelves = shelfList,
             robots = robotList,
-            delivery = deliveryConfig
+            delivery_points = deliveryList
         };
 
         string json = JsonUtility.ToJson(config);
@@ -241,7 +243,7 @@ public class SimulationConfig
 {
     public List<ShelfConfig> shelves;
     public List<RobotConfig> robots;
-    public DeliveryConfig delivery;
+    public List<DeliveryConfig> delivery_points;
 }
 
 [Serializable]
