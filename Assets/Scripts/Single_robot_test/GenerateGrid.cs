@@ -22,6 +22,7 @@ public class GridGenerator : MonoBehaviour
     public LayerMask shelfLayer;
     public LayerMask robotLayer;
     public LayerMask deliveryLayer;
+    public LayerMask chargingStationLayer;
     public int packagesPerShelf = 5;
 
     // Internal grid
@@ -144,6 +145,7 @@ public class GridGenerator : MonoBehaviour
         int shelfLayerIndex = (int)Mathf.Log(shelfLayer.value, 2);
         int robotLayerIndex = (int)Mathf.Log(robotLayer.value, 2);
         int deliveryLayerIndex = (int)Mathf.Log(deliveryLayer.value, 2);
+        int chargingStationLayerIndex = (int)Mathf.Log(chargingStationLayer.value, 2);
 
         // Find all GameObjects in scene
         GameObject[] allObjects = FindObjectsByType<GameObject>(FindObjectsSortMode.None);
@@ -214,12 +216,37 @@ public class GridGenerator : MonoBehaviour
             UnityEngine.Debug.LogWarning("[GridGenerator] No delivery points found, using default (0, 0)");
         }
 
+        // Detect Charging Station by layer - get first found
+        var chargingStationObject = allObjects
+            .Where(obj => obj.layer == chargingStationLayerIndex)
+            .Select(obj => obj.transform.root.gameObject)
+            .Distinct()
+            .FirstOrDefault();
+
+        ChargingStationConfig chargingStation;
+        if (chargingStationObject != null)
+        {
+            chargingStation = new ChargingStationConfig
+            {
+                x = chargingStationObject.transform.position.x,
+                z = chargingStationObject.transform.position.z
+            };
+            UnityEngine.Debug.Log($"[GridGenerator] Found charging station at ({chargingStation.x}, {chargingStation.z})");
+        }
+        else
+        {
+            // Provide a default charging station if none found
+            chargingStation = new ChargingStationConfig { x = 0.0f, z = 0.0f };
+            UnityEngine.Debug.LogWarning("[GridGenerator] No charging station found, using default (0, 0)");
+        }
+
         // Build Config Object
         SimulationConfig config = new SimulationConfig
         {
             shelves = shelfList,
             robots = robotList,
-            delivery_points = deliveryList
+            delivery_points = deliveryList,
+            charging_station = chargingStation
         };
 
         string json = JsonUtility.ToJson(config);
@@ -241,9 +268,10 @@ public class GridGenerator : MonoBehaviour
 [Serializable]
 public class SimulationConfig
 {
-    public List<ShelfConfig> shelves;
     public List<RobotConfig> robots;
+    public List<ShelfConfig> shelves;
     public List<DeliveryConfig> delivery_points;
+    public ChargingStationConfig charging_station;
 }
 
 [Serializable]
@@ -265,6 +293,13 @@ public class RobotConfig
 
 [Serializable]
 public class DeliveryConfig
+{
+    public float x;
+    public float z;
+}
+
+[Serializable]
+public class ChargingStationConfig
 {
     public float x;
     public float z;

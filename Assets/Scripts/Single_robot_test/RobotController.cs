@@ -5,71 +5,144 @@ using RosMessageTypes.Std;
 
 public class RobotController : MonoBehaviour
 {
+    [Header("ROS Configuration")]
     [SerializeField] private string robotName = "robot1";
-    [SerializeField] private float positionSmoothTime = 0.1f; // Smoothing per transizioni fluide
     [SerializeField] private bool debugLogs = true;
 
+    [Header("Movement")]
+    [SerializeField] private float positionSmoothTime = 0.1f;
+
+    [Header("Visual Feedback")]
+    [Tooltip("Oggetto da mostrare quando il robot ha preso il pacco (es. cubo).")]
+    [SerializeField] private GameObject packageVisual; 
+    [Tooltip("Renderer per cambiare colore quando il robot lavora.")]
+    [SerializeField] private Renderer statusRenderer;
+    [SerializeField] private Color workingColor = Color.green;
+
+    // ROS Vars
     private ROSConnection rosConnection;
     private string poseTopicName;
+    private string stateTopicName;
+    private string goalTopicName; // Nuovo topic da ascoltare
+
+    // Movement Vars
     private Vector3 targetPosition;
     private Vector3 positionVelocity = Vector3.zero;
     private bool hasReceivedFirstPose = false;
 
+    // Visual & Logic Vars
+    private Color defaultColor;
+    private int goalsReceivedCounter = 0; // Conta i viaggi durante un lavoro
+    private bool isExecuting = false;
+
     private void Start()
     {
-        // Inizializza la connessione ROS
-        rosConnection = ROSConnection.GetOrCreateInstance();
-        poseTopicName = $"/{robotName}/pose";
-
-        // Sottoscrivi al topic della posizione
-        rosConnection.Subscribe<PoseStampedMsg>(poseTopicName, OnPoseReceived);
-
-        if (debugLogs)
-            Debug.Log($"[{robotName}] RobotController inizializzato. In ascolto su {poseTopicName}");
-
-        // Inizializza la posizione target con la posizione attuale
-        targetPosition = transform.position;
-    }
-
-    private void OnPoseReceived(PoseStampedMsg poseMsg)
-    {
-        if (poseMsg == null || poseMsg.pose == null)
+        // Setup Visuals
+        if (packageVisual != null) packageVisual.SetActive(false);
+        
+        if (statusRenderer != null) 
         {
-            Debug.LogWarning($"[{robotName}] PoseMsg ricevuto ma null");
-            return;
+            defaultColor = statusRenderer.material.color;
+        }
+        else 
+        {
+            statusRenderer = GetComponentInChildren<Renderer>();
+            if(statusRenderer != null) defaultColor = statusRenderer.material.color;
         }
 
-        // Estrai la posizione dal messaggio ROS
-        // ROS usa X, Z (Y=0), Unity usa X, Y, Z
-        // Mappiamo: ROS.X -> Unity.X, ROS.Z -> Unity.Z, mantenendo Y invariato
+        // Init ROS
+        rosConnection = ROSConnection.GetOrCreateInstance();
+        targetPosition = transform.position;
+        
+        SetupTopicsAndSubscribe();
+    }
+
+    private void SetupTopicsAndSubscribe()
+    {
+        poseTopicName = $"/{robotName}/pose";
+        stateTopicName = $"/{robotName}/state";
+        goalTopicName = $"/{robotName}/goal"; // Il robot pubblica qui dove vuole andare
+
+        // Sottoscrizioni
+        rosConnection.Subscribe<PoseStampedMsg>(poseTopicName, OnPoseReceived);
+        rosConnection.Subscribe<StringMsg>(stateTopicName, OnStateReceived);
+        rosConnection.Subscribe<PoseStampedMsg>(goalTopicName, OnGoalReceived); // Ascoltiamo i goal
+
+        if (debugLogs)
+            Debug.Log($"[{robotName}] In ascolto su Pose, State e Goal.");
+    }
+
+    // --- 1. LOGICA STATO ---
+    private void OnStateReceived(StringMsg stateMsg)
+    {
+        if (stateMsg == null) return;
+        string state = stateMsg.data;
+
+        bool wasExecuting = isExecuting;
+        isExecuting = (state == "executing");
+
+        // Se lo stato cambia (es. da idle a executing o viceversa)
+        if (isExecuting != wasExecuting)
+        {
+            if (isExecuting)
+            {
+                // INIZIO LAVORO: Resetta contatore, nascondi pacco, cambia colore
+                goalsReceivedCounter = 0;
+                if (packageVisual != null) packageVisual.SetActive(false);
+                if (statusRenderer != null) statusRenderer.material.color = workingColor;
+            }
+            else
+            {
+                // FINE LAVORO (Idle): Resetta tutto
+                goalsReceivedCounter = 0;
+                if (packageVisual != null) packageVisual.SetActive(false);
+                if (statusRenderer != null) statusRenderer.material.color = defaultColor;
+            }
+        }
+    }
+
+    // --- 2. LOGICA GOAL (Il trucco sta qui) ---
+    private void OnGoalReceived(PoseStampedMsg goalMsg)
+    {
+        // Se riceviamo un goal mentre stiamo lavorando, incrementiamo il contatore
+        if (isExecuting)
+        {
+            goalsReceivedCounter++;
+            
+            // Logica:
+            // Goal 1 = Sto andando allo scaffale (Fetch)
+            // Goal 2 = Sto andando alla consegna (Delivery) -> HO IL PACCO
+            
+            if (goalsReceivedCounter >= 2)
+            {
+                if (packageVisual != null) packageVisual.SetActive(true);
+                if (debugLogs) Debug.Log($"[{robotName}] Preso il pacco (Goal #{goalsReceivedCounter})");
+            }
+        }
+    }
+
+    // --- 3. LOGICA MOVIMENTO (Invariata) ---
+    private void OnPoseReceived(PoseStampedMsg poseMsg)
+    {
+        if (poseMsg == null || poseMsg.pose == null) return;
+
         float rosX = (float)poseMsg.pose.position.x;
         float rosZ = (float)poseMsg.pose.position.z;
-        float unityY = transform.position.y; // Mantieni Y invariato
+        float unityY = transform.position.y;
 
         targetPosition = new Vector3(rosX, unityY, rosZ);
 
         if (!hasReceivedFirstPose)
         {
             hasReceivedFirstPose = true;
-            // Primo messaggio: posiziona immediatamente senza smoothing
             transform.position = targetPosition;
-            positionVelocity = Vector3.zero;
-
-            if (debugLogs)
-                Debug.Log($"[{robotName}] Prima posizione ricevuta: ({rosX:F2}, {unityY:F2}, {rosZ:F2})");
-        }
-        else if (debugLogs)
-        {
-            Debug.Log($"[{robotName}] Posizione aggiornata: ({rosX:F2}, {unityY:F2}, {rosZ:F2})");
         }
     }
 
     private void Update()
     {
-        if (!hasReceivedFirstPose)
-            return;
+        if (!hasReceivedFirstPose) return;
 
-        // Usa SmoothDamp per transizioni fluide verso la posizione target
         transform.position = Vector3.SmoothDamp(
             transform.position,
             targetPosition,
@@ -78,27 +151,24 @@ public class RobotController : MonoBehaviour
         );
     }
 
-    /// <summary>
-    /// Cambia il nome del robot e riottiene la connessione al nuovo topic
-    /// </summary>
     public void SetRobotName(string newRobotName)
     {
         if (rosConnection != null)
         {
-            rosConnection.Unsubscribe(poseTopicName);
+            if (!string.IsNullOrEmpty(poseTopicName)) rosConnection.Unsubscribe(poseTopicName);
+            if (!string.IsNullOrEmpty(stateTopicName)) rosConnection.Unsubscribe(stateTopicName);
+            if (!string.IsNullOrEmpty(goalTopicName)) rosConnection.Unsubscribe(goalTopicName);
         }
 
         robotName = newRobotName;
-        poseTopicName = $"/{robotName}/pose";
         hasReceivedFirstPose = false;
-        positionVelocity = Vector3.zero;
+        isExecuting = false;
+        goalsReceivedCounter = 0;
+        
+        // Reset visuali immediato
+        if (packageVisual != null) packageVisual.SetActive(false);
+        if (statusRenderer != null) statusRenderer.material.color = defaultColor;
 
-        if (rosConnection != null)
-        {
-            rosConnection.Subscribe<PoseStampedMsg>(poseTopicName, OnPoseReceived);
-
-            if (debugLogs)
-                Debug.Log($"[{robotName}] Topic aggiornato a {poseTopicName}");
-        }
+        if (rosConnection != null) SetupTopicsAndSubscribe();
     }
 }
