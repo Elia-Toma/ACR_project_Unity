@@ -78,47 +78,39 @@ public class RobotController : MonoBehaviour
         if (stateMsg == null) return;
         string state = stateMsg.data;
 
-        bool wasExecuting = isExecuting;
-        isExecuting = (state == "executing");
-
-        // Se lo stato cambia (es. da idle a executing o viceversa)
-        if (isExecuting != wasExecuting)
+        // Visual Reset for Idle or Charging
+        if (state == "idle" || state == "charging")
         {
-            if (isExecuting)
-            {
-                // INIZIO LAVORO: Resetta contatore, nascondi pacco, cambia colore
-                goalsReceivedCounter = 0;
-                if (packageVisual != null) packageVisual.SetActive(false);
-                if (statusRenderer != null) statusRenderer.material.color = workingColor;
-            }
-            else
-            {
-                // FINE LAVORO (Idle): Resetta tutto
-                goalsReceivedCounter = 0;
-                if (packageVisual != null) packageVisual.SetActive(false);
-                if (statusRenderer != null) statusRenderer.material.color = defaultColor;
-            }
+             // FINE LAVORO (Idle) o CHARGING: Resetta tutto
+            goalsReceivedCounter = 0;
+            if (packageVisual != null) packageVisual.SetActive(false);
+            if (statusRenderer != null) statusRenderer.material.color = defaultColor;
+            isExecuting = false;
         }
+        else if (state == "retrieving" || state == "returning")
+        {
+            // Andando a prendere il pacco (retrieving) o tonando alla base (returning):
+            // Colore attivo, MA niente pacco visibile
+            isExecuting = true;
+            if (packageVisual != null) packageVisual.SetActive(false);
+            if (statusRenderer != null) statusRenderer.material.color = workingColor;
+        }
+        else if (state == "delivering")
+        {
+            // Trasportando il pacco: Colore attivo E pacco visibile
+            isExecuting = true;
+            if (packageVisual != null) packageVisual.SetActive(true);
+            if (statusRenderer != null) statusRenderer.material.color = workingColor;
+        }
+        // "bidding" ignored or treated as no-op visual change
     }
 
     // --- 2. LOGICA GOAL (Il trucco sta qui) ---
+    // --- 2. LOGICA GOAL (Deprecata/Semplificata) ---
     private void OnGoalReceived(PoseStampedMsg goalMsg)
     {
-        // Se riceviamo un goal mentre stiamo lavorando, incrementiamo il contatore
-        if (isExecuting)
-        {
-            goalsReceivedCounter++;
-            
-            // Logica:
-            // Goal 1 = Sto andando allo scaffale (Fetch)
-            // Goal 2 = Sto andando alla consegna (Delivery) -> HO IL PACCO
-            
-            if (goalsReceivedCounter >= 2)
-            {
-                if (packageVisual != null) packageVisual.SetActive(true);
-                if (debugLogs) Debug.Log($"[{robotName}] Preso il pacco (Goal #{goalsReceivedCounter})");
-            }
-        }
+        // Non usiamo più i goal per indovinare lo stato del pacco.
+        // Lo stato 'delivering' ci dice esplicitamente quando mostrarlo.
     }
 
     // --- 3. LOGICA MOVIMENTO (Invariata) ---
